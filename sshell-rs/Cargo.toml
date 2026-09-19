@@ -10,24 +10,25 @@ name = "sshell-rs"
 path = "src/main.rs"
 
 [dependencies]
-gtk4 = { version = "0.9", features = ["v4_10"] }
+gtk4 = { version = "0.8", features = ["v4_10"] }
 gtk4-layer-shell = "0.3"
-glib = "0.20"
-gio = "0.20"
+glib = "0.19"
+gio = "0.19"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# jsonc-parser allows comments + trailing commas like config.jsonc
-jsonc-parser = "0.26"
-zbus = { version = "4", default-features = false, features = ["tokio", "p2p"] }
+zbus = { version = "4", default-features = false, features = ["tokio"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time", "fs"] }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "journald"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 notify = "6"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif"] }
+chrono = { version = "0.4", features = ["clock"] }
+# hyprland event stream (workspaces/monitors) lands next milestone; bar currently
+# static persistent dots + socket triggers to stay compiling without prerelease pin.
 
 [profile.release]
 opt-level = "z"
 lto = true
 strip = true
-panic = "abort"

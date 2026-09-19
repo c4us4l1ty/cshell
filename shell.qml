@@ -292,39 +292,9 @@ ShellRoot {
         onPressed: NotificationService.sendTestNotification()
     }
 
-    GlobalShortcut {
-        name: "brightnessUp"
-        description: "Increase Brightness"
-        onPressed: {
-            Brightness.change(0.05)
-        }
-    }
-
-    GlobalShortcut {
-        name: "brightnessDown"
-        description: "Decrease Brightness"
-        onPressed: {
-            Brightness.change(-0.05)
-        }
-    }
-    
-    GlobalShortcut {
-        name: "audioVolumeUp"
-        description: "Increase Volume"
-        onPressed: Audio.incrementVolume()
-    }
-
-    GlobalShortcut {
-        name: "audioVolumeDown"
-        description: "Decrease Volume"
-        onPressed: Audio.decrementVolume()
-    }
-    
-    GlobalShortcut {
-        name: "audioMute"
-        description: "Toggle Mute"
-        onPressed: Audio.toggleMute()
-    }
+    // NOTE: brightness/volume/media keys owned by sshell-rs CLI single-handler
+    // (keybinds.conf exec sshell-rs ... with fallback). No quickshell globals
+    // here by design — prevents double-step + OSD desync.
 
     GlobalShortcut {
         name: "shellStateToggle"
