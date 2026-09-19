@@ -1,0 +1,27 @@
+module sshell.services
+
+singleton Clock 1.0 Clock.qml
+singleton Persistent 1.0 Persistent.qml
+singleton QuickControlsService 1.0 QuickControlsService.qml
+singleton NotificationService 1.0 NotificationService.qml
+singleton HyprlandService 1.0 HyprlandService.qml
+singleton AppService 1.0 AppService.qml
+singleton LauncherSearch 1.0 LauncherSearch.qml
+singleton AppSearch 1.0 AppSearch.qml
+singleton ModuleLoader 1.0 ModuleLoader.qml
+singleton Battery 1.0 Battery.qml
+singleton Colors 1.0 Colors.qml
+singleton Clipboard 1.0 Clipboard.qml
+singleton Weather 1.0 Weather.qml
+singleton Network 1.0 Network.qml
+singleton Bluetooth 1.0 Bluetooth.qml
+singleton Audio 1.0 AudioService.qml
+singleton Brightness 1.0 Brightness.qml
+singleton SystemInfo 1.0 SystemInfo.qml
+singleton OSD 1.0 OSD.qml
+singleton OSDMonitor 1.0 OSDMonitor.qml
+singleton ShellState 1.0 ShellState.qml
+singleton WallpaperService 1.0 WallpaperService.qml
+singleton MprisController 1.0 MprisController.qml
+singleton CavaService 1.0 CavaService.qml
+singleton ResourceMonitor 1.0 ResourceMonitor.qml

@@ -1,0 +1,122 @@
+{
+    "bar": {
+        "enabled": true,
+        "position": "top", //top/bottom
+        "style": "floating", //full/floating/islands/modules
+        "height": 38,
+        "margin": 10,
+        "padding": 5,
+        "left": [
+            {
+                "module": "Launcher",
+                "enabled": true
+            },
+            {
+                "module": "Workspaces",
+                "enabled": true
+            },
+            {
+                "module": "Mpris",
+                "enabled": true
+            }
+        ],
+        "center": [
+            {
+                "module": "Clock",
+                "enabled": true
+            },
+            {
+                "module": "Weather",
+                "enabled": true
+            }
+        ],
+        "right": [
+            {
+                "module": "Battery",
+                "enabled": true
+            },
+            {
+                "module": "Tray",
+                "enabled": true
+            }
+        ]
+    },
+    "workspaces": {
+        "persistent": [
+            1,
+            2,
+            3,
+            4,
+            5
+        ],
+        "style": "dot", // arabic/roman/han/dot
+        "radius": "circle" // circle/rounded/sharp
+    },
+    "weather": {
+        "interval": 3600,
+        "unit": "metric", // metric/imperial
+        "city": "Anuradhapura, LK",
+        "useUSCS": false,
+        "enableGPS": false,
+        "hideLocation": true // hides the location text in the popup
+    },
+    "tray": {
+        "showNetworkName": true,
+        "showBluetoothName": true
+    },
+    "osd": {
+        "enabled": true,
+        "timeout": 1500,
+        "position": "top-center"
+    },
+    "background": {
+        "wallpaperPaths": [
+            "~/Pictures/wallpapers",
+            "~/Pictures/gifs"
+        ],
+        "copyAfter": true,
+        "copyAfterTo": "/usr/share/sddm/themes/silent/backgrounds/",
+        "copyAfterAs": "default.png",
+        "wallpaperMode": "image" // image/shader
+    },
+    "mpris": {
+        "barVisualizer": false,
+        "popupVisualizer": true,
+        "hideOnPause": true,
+        "maxWidthOnBar": 666,
+        "showArtist": false,
+        "ignore": []
+    },
+    "clock": {
+        "showDate": true,
+        "format": 12 // 12/24
+    },
+    "controlCenter": {
+        "enabled": true,
+        "width": 450,
+        "position": "right", // left/right
+        "showPfp": false
+    },
+    "notifications": {
+        "enabled": true,
+        "position": "top-right",
+        "maxNotifications": 5,
+        "groupAt": 3,
+        "timeout": 5000
+    },
+    "launcher": {
+        "enabled": true,
+        "width": 400,
+        "height": 500
+    },
+    "theme": {
+        "icons": "round", // filled/outlined/round/sharp/two-tone
+        "colorizeTerminal": true,
+        "darkmode": true,
+        "mainFont": "CaskaydiaCove Nerd Font",
+        "titleFont": "Inter",
+        "monoFont": "JetBrains Mono",
+        "iconFont": "Material Symbols Rounded",
+        "nerdFont": "CaskaydiaCove Nerd Font"
+    }
+}
