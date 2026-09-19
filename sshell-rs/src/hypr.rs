@@ -108,7 +108,14 @@ pub fn event_loop(mut on_event: impl FnMut() + Send + 'static) {
                 || ev.starts_with("moveworkspace>>")
                 || ev.starts_with("createworkspace>>")
                 || ev.starts_with("destroyworkspace>>")
+                || ev.starts_with("monitoradded>>")
+                || ev.starts_with("monitorremoved>>")
+                || ev.starts_with("openwindow>>")
+                || ev.starts_with("closewindow>>")
             {
+                // NOTE: single top bar (not per-monitor like QML Variants). Monitor
+                // events re-snap workspaces label; HDMI gets no second bar by design
+                // (documented single-bar limitation saves ~40MB + wakeups).
                 on_event();
             }
         }

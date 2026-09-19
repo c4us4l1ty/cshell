@@ -112,6 +112,9 @@ pub struct ShellConfig {
     pub tray: serde_json::Value,
     #[serde(default)]
     pub osd: serde_json::Value,
+    /// Unknown top-level keys preserved across save (no silent drop on Apply).
+    #[serde(default, flatten)]
+    pub extra: std::collections::HashMap<String, serde_json::Value>,
 }
 
 impl ShellConfig {
@@ -255,6 +258,14 @@ pub fn load_config(path: &Path) -> Result<ShellConfig> {
     }
     if !["full", "floating", "islands", "modules"].contains(&cfg.bar.style.as_str()) {
         anyhow::bail!("bar.style must be full|floating|islands|modules");
+    }
+    let ccw = cfg.control_center_width();
+    if ccw < 200 || ccw > 800 {
+        anyhow::bail!("controlCenter.width {} out of range 200..800", ccw);
+    }
+    let osd = cfg.osd_timeout_ms();
+    if !(500..=10000).contains(&osd) {
+        anyhow::bail!("osd.timeout {} out of range 500..10000", osd);
     }
     Ok(cfg)
 }

@@ -61,6 +61,7 @@ pub fn watch_mpris(on_change: impl Fn() + Send + 'static) {
                 Ok(s) => s,
                 Err(_) => return,
             };
+            let mut last_fire = std::time::Instant::now() - std::time::Duration::from_secs(10);
             while let Some(msg) = stream.next().await {
                 let msg = match msg {
                     Ok(m) => m,
@@ -68,6 +69,10 @@ pub fn watch_mpris(on_change: impl Fn() + Send + 'static) {
                 };
                 if let Some(path) = msg.header().path() {
                     if path.as_str().starts_with("/org/mpris/MediaPlayer2") {
+                        if last_fire.elapsed() < std::time::Duration::from_millis(300) {
+                            continue;
+                        }
+                        last_fire = std::time::Instant::now();
                         on_change();
                     }
                 }
@@ -99,6 +104,12 @@ pub fn watch_net(on_change: impl Fn() + Send + 'static) {
                 Ok(s) => s,
                 Err(_) => return,
             };
+            // Storm guard: BlueZ RSSI + systemd chatter can burst; coalesce to 500ms.
+            // TODO(zbus-nonbreaking): split into two sender-constrained MatchRules
+            // (org.freedesktop.NetworkManager, org.bluez) when builder API allows;
+            // bus-side filter would cut wakeups further. Current Rust-side sender
+            // check is correct, just wakes userspace more often (debounced here).
+            let mut last_fire = std::time::Instant::now() - std::time::Duration::from_secs(10);
             while let Some(msg) = stream.next().await {
                 let msg = match msg {
                     Ok(m) => m,
@@ -106,13 +117,17 @@ pub fn watch_net(on_change: impl Fn() + Send + 'static) {
                 };
                 let sender = msg.header().sender().map(|s| s.to_string()).unwrap_or_default();
                 let on_nm_path = msg.header().path().map(|p| p.as_str().starts_with("/org/freedesktop/NetworkManager")).unwrap_or(false);
-                if sender.starts_with("org.freedesktop.NetworkManager") || sender.starts_with(":") && on_nm_path {
-                    on_change();
+                let wanted = sender.starts_with("org.freedesktop.NetworkManager")
+                    || sender.starts_with("org.bluez")
+                    || (sender.starts_with(":") && on_nm_path);
+                if !wanted {
                     continue;
                 }
-                if sender.starts_with("org.bluez") {
-                    on_change();
+                if last_fire.elapsed() < std::time::Duration::from_millis(500) {
+                    continue;
                 }
+                last_fire = std::time::Instant::now();
+                on_change();
             }
         });
     });

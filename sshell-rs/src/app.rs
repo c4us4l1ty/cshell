@@ -127,19 +127,24 @@ struct BarWidgets {
     weather: gtk4::Label,
 }
 
-fn refresh_bar(w: &BarWidgets, cfg: &ShellConfig) {
+/// Cheap fast path: clock + workspaces only (<10ms, no D-Bus). Called on every wake.
+fn refresh_fast(w: &BarWidgets, cfg: &ShellConfig) {
     w.win.set_visible(cfg.bar.enabled);
     w.clock.set_text(&clock_text(cfg));
     w.clock.set_visible(mod_enabled(cfg, "center", "Clock"));
+    w.workspaces.set_text(&hypr::dots_label(&hypr::workspaces(), hypr::active_id()));
+    w.workspaces.set_visible(mod_enabled(cfg, "left", "Workspaces"));
+    w.launcher.set_visible(mod_enabled(cfg, "left", "Launcher"));
+}
+
+/// Heavy slow path: battery/net/mpris/weather (D-Bus + sysfs). Debounced 300ms.
+fn refresh_slow(w: &BarWidgets, cfg: &ShellConfig) {
     let b = battery::read_sysfs();
     w.battery.set_text(&battery::bar_text(&b));
     w.battery.set_visible(mod_enabled(cfg, "right", "Battery"));
     let n = network::snapshot_offline();
     w.net.set_text(&network::bar_text(&n, true));
     w.net.set_visible(mod_enabled(cfg, "right", "Tray"));
-    w.workspaces.set_text(&hypr::dots_label(&hypr::workspaces(), hypr::active_id()));
-    w.workspaces.set_visible(mod_enabled(cfg, "left", "Workspaces"));
-    w.launcher.set_visible(mod_enabled(cfg, "left", "Launcher"));
     // MPRIS live read on refresh (wake-driven, never polled)
     if mod_enabled(cfg, "left", "Mpris") {
         let track = mpris::current();
@@ -173,6 +178,15 @@ fn refresh_bar(w: &BarWidgets, cfg: &ShellConfig) {
         let dim = battery::should_dim(p, false);
         w.battery.set_tooltip_text(Some(if dim { "battery-dimmer active (≤50%)" } else { "" }));
     }
+}
+
+fn refresh_bar(w: &BarWidgets, cfg: &ShellConfig) {
+    refresh_fast(w, cfg);
+    refresh_slow(w, cfg);
+}
+
+fn file_mtime(p: &std::path::Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(p).ok().and_then(|m| m.modified().ok())
 }
 
 fn make_bar_window(app: &gtk4::Application, cfg: &ShellConfig) -> BarWidgets {
@@ -939,7 +953,7 @@ pub fn run(cfg: ShellConfig) {
                     ww.set_visible(false);
                 }
             });
-            // populate on open (scan once per open = user action, no background poll)
+            // populate on open: instant placeholders + chunked thumbs (8/idle, no 12s freeze)
             let f2 = flow.clone();
             let s2 = status.clone();
             let scanned2 = scanned.clone();
@@ -950,17 +964,40 @@ pub fn run(cfg: ShellConfig) {
                 let home = std::env::var("HOME").unwrap_or_else(|_| "/root".into());
                 let paths = vec![format!("{}/Pictures/wallpapers", home), format!("{}/Pictures/gifs", home)];
                 let list = wallpaper::scan(&paths);
+                s2.set_text(&format!("{} wallpapers (loading…)", list.len()));
+                let items: Vec<std::path::PathBuf> = list.iter().take(40).cloned().collect();
+                *scanned2.borrow_mut() = items.clone();
                 s2.set_text(&format!("{} wallpapers", list.len()));
-                *scanned2.borrow_mut() = list.iter().take(60).cloned().collect();
-                for p in list.iter().take(60) {
-                    let thumb = wallpaper::ensure_thumb(p).unwrap_or_else(|| p.clone());
-                    let pic = gtk4::Picture::for_filename(thumb.to_string_lossy().as_ref());
-                    pic.set_size_request(128, 128);
+                // placeholders first (instant open <100ms), thumbs fill 8 per idle tick
+                let placeholders: Vec<gtk4::FlowBoxChild> = items.iter().map(|pp| {
                     let child = gtk4::FlowBoxChild::new();
-                    child.set_widget_name(&format!("wp:{}", p.display()));
-                    child.set_child(Some(&pic));
+                    child.set_widget_name(&format!("wp:{}", pp.display()));
+                    let lbl = gtk4::Label::new(Some("…"));
+                    lbl.set_size_request(128, 128);
+                    child.set_child(Some(&lbl));
                     f2.append(&child);
-                }
+                    child
+                }).collect();
+                let idx = std::rc::Rc::new(std::cell::RefCell::new(0usize));
+                let items_rc = std::rc::Rc::new(items);
+                glib::idle_add_local_full(glib::Priority::LOW, move || {
+                    let mut i = idx.borrow_mut();
+                    for _ in 0..8 {
+                        if *i >= items_rc.len() {
+                            return glib::ControlFlow::Break;
+                        }
+                        let pp = &items_rc[*i];
+                        if let Some(child) = placeholders.get(*i) {
+                            // cached thumb or source (full-res fallback only if decode fails)
+                            let thumb = wallpaper::ensure_thumb(pp).unwrap_or_else(|| pp.clone());
+                            let pic = gtk4::Picture::for_filename(thumb.to_string_lossy().as_ref());
+                            pic.set_size_request(128, 128);
+                            child.set_child(Some(&pic));
+                        }
+                        *i += 1;
+                    }
+                    glib::ControlFlow::Continue
+                });
             });
         }
 
@@ -1096,7 +1133,7 @@ pub fn run(cfg: ShellConfig) {
         wins.borrow_mut().insert("wallpaper".into(), wp_win.clone());
         wins.borrow_mut().insert("tray".into(), tray_popup.clone());
 
-        // Single consumer: Refresh (+config reload) | Toggle | Osd
+        // Single consumer: Refresh (fast always, slow debounced) | Toggle | Osd
         {
             let w = widgets.clone();
             let c = cfg.clone();
@@ -1112,41 +1149,86 @@ pub fn run(cfg: ShellConfig) {
             let cn = cc_notif.clone();
             let tl = toast_label.clone();
             let tw = toast.clone();
+            let etx_w = etx.clone();
+            let last_heavy = std::rc::Rc::new(std::cell::RefCell::new(std::time::Instant::now() - Duration::from_secs(10)));
+            let last_cfg_mtime = std::rc::Rc::new(std::cell::RefCell::new(file_mtime(&cp)));
+            let last_theme_mtime = std::rc::Rc::new(std::cell::RefCell::new(file_mtime(&theme::theme_json_path())));
+            let last_weather_try = std::rc::Rc::new(std::cell::RefCell::new(std::time::Instant::now() - Duration::from_secs(36000)));
+            let last_toast_id = std::rc::Rc::new(std::cell::RefCell::new(0u32));
             glib::MainContext::default().spawn_local(async move {
                 while let Ok(ev) = erx.recv().await {
                     match ev {
                         ipc::Event::Refresh => {
-                            if let Ok(nc) = config::load_config(&cp) {
-                                *c.borrow_mut() = nc;
-                            }
-                            theme::reload_into(&css_provider, FADE_CSS);
-                            refresh_bar(&w, &c.borrow());
-                            {
-                                let n = ts.lock().unwrap().items.len();
-                                w.net.set_tooltip_text(Some(&format!("{} tray items (Tray… in ControlCenter)", n)));
-                            }
-                            // Notifications UI rides the same wake (DND suppresses toast)
-                            let (last, n, dnd) = {
-                                let mut st = ns.lock().unwrap();
-                                let last = st.list.last().cloned();
-                                let n = st.list.len();
-                                let dnd = st.dnd;
-                                if last.is_some() {
-                                    let id = last.as_ref().map(|x| x.id).unwrap_or(0);
-                                    st.close(id);
+                            // config reload only on mtime change (no reparse storm)
+                            let cur_mtime = file_mtime(&cp);
+                            if cur_mtime != *last_cfg_mtime.borrow() {
+                                if let Ok(nc) = config::load_config(&cp) {
+                                    *c.borrow_mut() = nc;
+                                    *last_cfg_mtime.borrow_mut() = cur_mtime;
                                 }
-                                (last, n, dnd)
+                            }
+                            // theme reload only on mtime change (no CSS reparse storm)
+                            let cur_theme = file_mtime(&theme::theme_json_path());
+                            if cur_theme != *last_theme_mtime.borrow() {
+                                theme::reload_into(&css_provider, FADE_CSS);
+                                *last_theme_mtime.borrow_mut() = cur_theme;
+                            }
+                            // fast path always (clock + workspaces <10ms)
+                            refresh_fast(&w, &c.borrow());
+                            // notifications: keep history (do NOT consume), toast only new ids
+                            let (pending, n, dnd) = {
+                                let st = ns.lock().unwrap();
+                                let last = st.list.last().cloned();
+                                (last, st.list.len(), st.dnd)
                             };
+                            // CC count + last-3 titles in tooltip (history preserved, max5)
                             cn.set_text(&format!("{} Notifications", n));
-                            if let Some(n) = last {
-                                if !dnd {
-                                    tl.set_text(&format!("{} — {}\n{}", n.app, n.title, n.body));
-                                    tw.set_visible(true);
-                                    let t = tw.clone();
-                                    glib::timeout_add_local_once(
-                                        Duration::from_millis(if n.timeout_ms > 0 { n.timeout_ms as u64 } else { 5000 }),
-                                        move || t.set_visible(false),
-                                    );
+                            {
+                                let titles: Vec<String> = ns.lock().unwrap().list.iter().rev().take(3)
+                                    .map(|x| format!("{}: {}", x.app, x.title)).collect();
+                                cn.set_tooltip_text(Some(&if titles.is_empty() { "No notifications".into() } else { titles.join("\n") }));
+                            }
+                            if let Some(nn) = pending {
+                                let mut lid = last_toast_id.borrow_mut();
+                                if nn.id != *lid {
+                                    *lid = nn.id;
+                                    if !dnd {
+                                        tl.set_text(&format!("{} \u2014 {}\n{}", nn.app, nn.title, nn.body));
+                                        tw.set_visible(true);
+                                        let t = tw.clone();
+                                        glib::timeout_add_local_once(
+                                            Duration::from_millis(if nn.timeout_ms > 0 { nn.timeout_ms as u64 } else { 5000 }),
+                                            move || t.set_visible(false),
+                                        );
+                                    }
+                                }
+                            }
+                            // slow path debounced 300ms (battery/net/mpris/weather coalesced)
+                            let heavy_due = last_heavy.borrow().elapsed() >= Duration::from_millis(300);
+                            if heavy_due {
+                                *last_heavy.borrow_mut() = std::time::Instant::now();
+                                refresh_slow(&w, &c.borrow());
+                                {
+                                    let n = ts.lock().unwrap().items.len();
+                                    w.net.set_tooltip_text(Some(&format!("{} tray items (Tray\u2026 in ControlCenter)", n)));
+                                }
+                                // weather auto-fetch when stale + online (threaded, never blocks UI)
+                                {
+                                    let city = c.borrow().weather_city();
+                                    let stale = !weather::cached_valid(Duration::from_secs(6 * 3600));
+                                    let online = {
+                                        let s = network::snapshot_offline();
+                                        s.wifi_connected || s.eth_connected
+                                    };
+                                    let retry_due = last_weather_try.borrow().elapsed() >= Duration::from_secs(600);
+                                    if !city.is_empty() && stale && online && retry_due {
+                                        *last_weather_try.borrow_mut() = std::time::Instant::now();
+                                        let txw = etx_w.clone();
+                                        std::thread::spawn(move || {
+                                            let _ = weather::fetch_now(&city);
+                                            let _ = txw.send_blocking(ipc::Event::Refresh);
+                                        });
+                                    }
                                 }
                             }
                         }

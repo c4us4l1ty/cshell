@@ -53,9 +53,41 @@ pub fn current_frac() -> Option<f64> {
     Some((cur / max).clamp(0.0, 1.0))
 }
 
+fn override_paths() -> Vec<std::path::PathBuf> {
+    let mut v = Vec::new();
+    if let Ok(xdg) = std::env::var("XDG_RUNTIME_DIR") {
+        v.push(std::path::PathBuf::from(xdg).join("sshell/backlight-override"));
+    }
+    // per-user runtime fallback via $USER id lookup is done by daemon glob;
+    // always also try legacy system path (daemon runs as root and reads both)
+    v.push(std::path::PathBuf::from("/run/sshell/backlight-override"));
+    // best-effort per-uid runtimes when XDG unset (greetd/TTY edge)
+    if std::env::var("XDG_RUNTIME_DIR").is_err() {
+        if let Ok(rd) = std::fs::read_dir("/run/user") {
+            for e in rd.flatten() {
+                v.push(e.path().join("sshell/backlight-override"));
+                if v.len() > 8 { break; }
+            }
+        }
+    }
+    v
+}
+
 fn set_override_flag() {
-    let _ = fs::create_dir_all("/run/sshell");
-    let _ = fs::write("/run/sshell/backlight-override", b"1");
+    let mut done = false;
+    for p in override_paths() {
+        if let Some(dir) = p.parent() {
+            let _ = fs::create_dir_all(dir);
+        }
+        if fs::write(&p, b"1").is_ok() {
+            done = true;
+            break;
+        }
+    }
+    if !done {
+        let _ = fs::create_dir_all("/run/sshell");
+        let _ = fs::write("/run/sshell/backlight-override", b"1");
+    }
 }
 
 pub fn change(delta_frac: f64) -> Result<()> {

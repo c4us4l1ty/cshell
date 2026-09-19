@@ -19,10 +19,14 @@ fn wpctl(args: &[&str]) -> Option<String> {
 }
 
 /// Read-only refresh, called on ControlCenter open / OSD trigger — never on a timer.
+/// Returns 0.0 (not phantom 0.5) when PipeWire has no default sink.
 pub fn refresh() -> AudioState {
     // `wpctl get-volume @DEFAULT_AUDIO_SINK@` -> "Volume: 0.45 [MUTED]" variants
-    let mut st = AudioState { volume01: 0.5, muted: false };
+    let mut st = AudioState { volume01: 0.0, muted: false };
+    let mut _have_sink = false;
     if let Some(line) = wpctl(&["get-volume", "@DEFAULT_AUDIO_SINK@"]) {
+        _have_sink = true;
+        let _ = have_sink;
         // parse first float in line
         let mut num = String::new();
         let mut started = false;
@@ -47,6 +51,10 @@ pub fn refresh() -> AudioState {
 pub fn set_volume(frac: f64) {
     let v = frac.clamp(0.0, 1.0);
     let pct = (v * 100.0).round() as i64;
+    // standard UX: volume keys unmute (wpctl set-volume alone leaves MUTE on)
+    let _ = Command::new("wpctl")
+        .args(["set-mute", "@DEFAULT_AUDIO_SINK@", "0"])
+        .output();
     // single writer: one wpctl call per user gesture (no double-step)
     let _ = Command::new("wpctl")
         .args(["set-volume", "@DEFAULT_AUDIO_SINK@", &format!("{}%", pct), "-l", "1.0"])

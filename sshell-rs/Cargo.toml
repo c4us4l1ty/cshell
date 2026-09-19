@@ -25,7 +25,7 @@ futures-lite = "2"
 async-channel = "2"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 chrono = { version = "0.4", features = ["clock"] }
 # hyprland event stream (workspaces/monitors) lands next milestone; bar currently
 # static persistent dots + socket triggers to stay compiling without prerelease pin.

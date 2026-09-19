@@ -16,23 +16,63 @@ fn is_img(p: &Path) -> bool {
     )
 }
 
+fn expand_tilde(raw: &str, home: &str) -> String {
+    if raw == "~" {
+        return home.to_string();
+    }
+    if let Some(rest) = raw.strip_prefix("~/") {
+        return format!("{}/{}", home, rest);
+    }
+    raw.to_string()
+}
+
 pub fn scan(paths: &[String]) -> Vec<PathBuf> {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/root".into());
     let mut out = Vec::new();
+    // symlink-cycle guard: never follow symlinked dirs, cap depth/files
+    let mut seen_dirs: std::collections::HashSet<(u64, u64)> = std::collections::HashSet::new();
     for raw in paths {
-        let expanded = raw.replace('~', &home);
+        let expanded = expand_tilde(raw, &home);
         let root = PathBuf::from(&expanded);
-        let mut stack = vec![root];
-        while let Some(dir) = stack.pop() {
+        let mut stack: Vec<(PathBuf, usize)> = vec![(root, 0)];
+        while let Some((dir, depth)) = stack.pop() {
+            if depth > 6 || out.len() > 2000 {
+                continue;
+            }
+            // do not follow symlink dirs (prevents parent-cycle infinite loop)
+            if let Ok(md) = std::fs::symlink_metadata(&dir) {
+                if md.file_type().is_symlink() {
+                    continue;
+                }
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::MetadataExt;
+                    if !seen_dirs.insert((md.dev(), md.ino())) {
+                        continue;
+                    }
+                }
+            }
             let rd = match fs::read_dir(&dir) {
                 Ok(r) => r,
                 Err(_) => continue,
             };
             for e in rd.flatten() {
                 let p = e.path();
-                if p.is_dir() {
-                    stack.push(p);
-                } else if is_img(&p) {
+                // lstat: skip symlinked dirs, allow symlinked files (read-only thumb)
+                if let Ok(md) = std::fs::symlink_metadata(&p) {
+                    if md.file_type().is_symlink() {
+                        if p.is_dir() {
+                            continue;
+                        }
+                    } else if md.is_dir() {
+                        stack.push((p, depth + 1));
+                        continue;
+                    }
+                } else if p.is_dir() {
+                    stack.push((p, depth + 1));
+                    continue;
+                }
+                if is_img(&p) {
                     out.push(p);
                 }
             }

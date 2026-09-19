@@ -58,6 +58,8 @@ fn send_line(line: &str) -> bool {
         Ok(s) => s,
         Err(_) => return false,
     };
+    let _ = s.set_read_timeout(Some(std::time::Duration::from_millis(500)));
+    let _ = s.set_write_timeout(Some(std::time::Duration::from_millis(500)));
     if s.write_all(line.as_bytes()).is_err() {
         return false;
     }

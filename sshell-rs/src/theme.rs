@@ -10,10 +10,35 @@ pub fn theme_json_path() -> PathBuf {
     PathBuf::from(home).join(".config/sshell/material-theme.json")
 }
 
-/// Recursively find first string value for `key` (handles matugen's nested hex json).
+/// Deep hex search under a `primary` subtree (handles real matugen shape
+/// {"primary":{"default":{"hex":"#D0BCFF"}}} where leaves are objects, not strings).
+fn deep_hex(v: &serde_json::Value) -> Option<String> {
+    match v {
+        serde_json::Value::String(s) if s.starts_with('#') => Some(s.clone()),
+        serde_json::Value::Object(m) => {
+            // prefer hex/default leaves first (stable accent, not random nested key order)
+            for k in ["hex", "default", "dark", "light"] {
+                if let Some(sub) = m.get(k) {
+                    if let Some(s) = deep_hex(sub) {
+                        return Some(s);
+                    }
+                }
+            }
+            for (_, sub) in m {
+                if let Some(s) = deep_hex(sub) {
+                    return Some(s);
+                }
+            }
+            None
+        }
+        serde_json::Value::Array(a) => a.iter().find_map(deep_hex),
+        _ => None,
+    }
+}
+
+/// Recursively find `key` subtree then deep-search hex inside it.
 fn find_key(v: &serde_json::Value, key: &str) -> Option<String> {
     match v {
-        serde_json::Value::String(_) => None,
         serde_json::Value::Object(m) => {
             for (k, val) in m {
                 if k == key {
@@ -22,13 +47,8 @@ fn find_key(v: &serde_json::Value, key: &str) -> Option<String> {
                             return Some(s.to_string());
                         }
                     }
-                    // nested {default:{hex:...}} / {dark:...}
-                    for sub in ["default", "hex", "dark", "light"] {
-                        if let Some(s) = val.get(sub).and_then(|x| x.as_str()) {
-                            if s.starts_with('#') {
-                                return Some(s.to_string());
-                            }
-                        }
+                    if let Some(s) = deep_hex(val) {
+                        return Some(s);
                     }
                 }
                 if let Some(found) = find_key(val, key) {
@@ -64,6 +84,14 @@ pub fn reload_into(provider: &gtk4::CssProvider, base_css: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn finds_real_matugen_shape() {
+        let v: serde_json::Value = serde_json::from_str(
+            r##"{"colors":{"primary":{"default":{"hex":"#D0BCFF"}}}}"##,
+        )
+        .unwrap();
+        assert_eq!(find_key(&v, "primary"), Some("#D0BCFF".into()));
+    }
     #[test]
     fn finds_nested_primary() {
         let v: serde_json::Value = serde_json::from_str(

@@ -51,8 +51,23 @@ pub fn scan() -> Vec<Entry> {
                     }
                 } else if let Some(v) = line.strip_prefix("Exec=") {
                     if exec.is_empty() {
-                        // strip %U/%F field codes (no shell)
-                        exec = v.split_whitespace().next().unwrap_or("").to_string();
+                        // quoted path ("...") or first token; strip %U/%F field codes (no shell)
+                        let v = v.trim();
+                        if let Some(q) = v.strip_prefix('"') {
+                            if let Some(end) = q.find('"') {
+                                exec = q[..end].to_string();
+                            } else {
+                                exec = q.split_whitespace().next().unwrap_or("").to_string();
+                            }
+                        } else if let Some(q) = v.strip_prefix('\'') {
+                            if let Some(end) = q.find('\'') {
+                                exec = q[..end].to_string();
+                            } else {
+                                exec = q.split_whitespace().next().unwrap_or("").to_string();
+                            }
+                        } else {
+                            exec = v.split_whitespace().next().unwrap_or("").to_string();
+                        }
                     }
                 } else if let Some(v) = line.strip_prefix("Icon=") {
                     if icon.is_empty() {
@@ -75,6 +90,9 @@ pub fn scan() -> Vec<Entry> {
     }
     out.sort_by_key(|e| e.name.to_lowercase());
     out.dedup_by(|a, b| a.desktop_id == b.desktop_id);
+    // Flathub + system duplicates share Name with different IDs: keep first per name
+    let mut seen = std::collections::HashSet::new();
+    out.retain(|e| seen.insert(e.name.to_lowercase()));
     out
 }
 

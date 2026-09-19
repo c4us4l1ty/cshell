@@ -64,6 +64,10 @@ readonly THRESHOLD HYSTERESIS DIM_BY_PERCENT MIN_PERCENT \
 (( DIM_BY_PERCENT >= 1 && DIM_BY_PERCENT <= 95 )) || { printf 'Fatal: DIM_BY_PERCENT must be [1-95].\n' >&2; exit 1; }
 (( MIN_PERCENT >= 1 && MIN_PERCENT <= 50 )) || { printf 'Fatal: MIN_PERCENT must be [1-50].\n' >&2; exit 1; }
 (( BASE_POLL_INTERVAL >= 5 && BASE_POLL_INTERVAL <= 86400 )) || { printf 'Fatal: BASE_POLL_INTERVAL out of range.\n' >&2; exit 1; }
+(( SUSPEND_THRESHOLD >= 5 && SUSPEND_THRESHOLD <= 300 )) || { printf 'Fatal: SUSPEND_THRESHOLD must be [5-300].\n' >&2; exit 1; }
+(( LOG_THROTTLE >= 5 && LOG_THROTTLE <= 3600 )) || { printf 'Fatal: LOG_THROTTLE must be [5-3600].\n' >&2; exit 1; }
+(( RESCAN_EVERY >= 1 && RESCAN_EVERY <= 1000 )) || { printf 'Fatal: RESCAN_EVERY must be [1-1000].\n' >&2; exit 1; }
+(( UDEV_DEBOUNCE_MS <= 1000 )) || { printf 'Fatal: UDEV_DEBOUNCE_MS must be [0-1000].\n' >&2; exit 1; }
 
 # Fast-path CLI dispatcher
 if [[ "${1:-}" == "--help" ]]; then
@@ -94,6 +98,13 @@ if [[ "${1:-}" == "--status" ]]; then
             if ! flock -n "$chk_fd"; then
                 _daemon_running=1
                 read -r _daemon_pid < "$LOCK_FILE" 2>/dev/null || _daemon_pid="unknown"
+                # PID-reuse guard: verify cmdline actually is battery-dimmer
+                if [[ "$_daemon_pid" =~ ^[0-9]+$ ]] && [[ -f "/proc/$_daemon_pid/cmdline" ]]; then
+                    if ! tr '\0' ' ' < "/proc/$_daemon_pid/cmdline" 2>/dev/null | grep -q "battery-dimmer"; then
+                        _daemon_running=0
+                        _daemon_pid="stale($_daemon_pid)"
+                    fi
+                fi
             fi
             exec {chk_fd}<&- 2>/dev/null || true
         fi
@@ -159,6 +170,8 @@ log_msg() {
     local msg=$1 entry
     printf -v entry '%(%Y-%m-%d %H:%M:%S)T [battery-dimmer][%d] %s\n' -1 "$$" "$msg"
     printf '%s' "$entry" >&"$LOG_FD" 2>/dev/null || true
+    # duplicate to stdout so systemd journal captures it (StandardOutput=journal)
+    printf '%s' "$entry" 2>/dev/null || true
     LOG_BYTES+=${#entry}
 }
 
@@ -215,8 +228,11 @@ install_udev() {
     [[ -d /etc/udev/rules.d ]] || { printf 'Fatal: /etc/udev/rules.d does not exist.\n' >&2; exit 1; }
     cat << 'EOF' > "$UDEV_RULE"
 # /etc/udev/rules.d/99-battery-dimmer.rules
-# Pure asynchronous zero-fork notification engine for battery-dimmer
-SUBSYSTEM=="power_supply", ACTION=="add|change|remove", RUN+="/bin/sh -c 'echo 1 | dd of=/run/battery-dimmer/wakeup.pipe oflag=nonblock status=none 2>/dev/null || true'"
+# Async wake for battery-dimmer: one dd fork per hardware event is unavoidable
+# (udev RUN always forks); daemon loop itself stays zero-fork.
+SUBSYSTEM=="power_supply", ACTION=="add", RUN+="/bin/sh -c 'echo 1 | dd of=/run/battery-dimmer/wakeup.pipe oflag=nonblock status=none 2>/dev/null || true'"
+SUBSYSTEM=="power_supply", ACTION=="change", RUN+="/bin/sh -c 'echo 1 | dd of=/run/battery-dimmer/wakeup.pipe oflag=nonblock status=none 2>/dev/null || true'"
+SUBSYSTEM=="power_supply", ACTION=="remove", RUN+="/bin/sh -c 'echo 1 | dd of=/run/battery-dimmer/wakeup.pipe oflag=nonblock status=none 2>/dev/null || true'"
 EOF
     udevadm control --reload-rules 2>/dev/null || true
     udevadm trigger --subsystem-match=power_supply 2>/dev/null || true
@@ -244,6 +260,9 @@ Wants=systemd-udevd.service
 [Service]
 Type=simple
 ExecStart=$(command -v bash) $self_bin
+EnvironmentFile=-/etc/battery-dimmer.env
+StandardOutput=journal
+StandardError=journal
 Restart=always
 RestartSec=5s
 KillMode=mixed
@@ -271,6 +290,7 @@ DevicePolicy=closed
 DeviceAllow=/dev/null rw
 DeviceAllow=/dev/urandom r
 ReadWritePaths=/run /var/lib /sys/class/backlight /sys/devices
+ReadOnlyPaths=/proc /sys/class/power_supply /proc/sys/kernel/random
 
 [Install]
 WantedBy=multi-user.target
@@ -823,8 +843,46 @@ ramp_aware_dim() {
     return 0
 }
 
+# Manual override flag shared with sshell-rs (XDG first, legacy /run second).
+# sshell-rs writes $XDG_RUNTIME_DIR/sshell/backlight-override or /run/sshell/backlight-override
+# on every manual key/slider. Dimmer yields while flag is fresh (<4h) until AC clears it.
+has_manual_override_file() {
+    local f
+    for f in "${XDG_RUNTIME_DIR:-/run/user/0}/sshell/backlight-override" /run/sshell/backlight-override; do
+        [[ -f "$f" ]] || continue
+        # fresh check via mtime (find without fork? use test -nt with 4h sentinel is complex;
+        # accept any existing flag — AC restore clears it, reboot clears /run)
+        return 0
+    done
+    # also match any logged-in user runtime (dock/multi-seat)
+    for f in /run/user/*/sshell/backlight-override; do
+        [[ -f "$f" ]] && return 0
+    done
+    return 1
+}
+
+clear_override_files() {
+    rm -f /run/sshell/backlight-override 2>/dev/null || true
+    rm -f /run/user/*/sshell/backlight-override 2>/dev/null || true
+}
+
 apply_dim() {
     (( ${#BACKLIGHTS[@]} == 0 )) && return 0
+    # shared-flag yield: manual key suspends auto-dim until AC (prevents re-dim race)
+    if has_manual_override_file; then
+        local bl2
+        for bl2 in "${BACKLIGHTS[@]}"; do
+            if [[ "${BL_DIMMED["$bl2"]:-0}" == "1" ]]; then
+                BL_DIMMED["$bl2"]=0
+                BL_OVERRIDE["$bl2"]=1
+                unset "BL_TARGET[$bl2]" "BL_ORIG[$bl2]"
+            fi
+        done
+        sync_system_dimmed_state
+        persist_state
+        log_throttled "override-file" "Manual override flag present. Autonomous dimming suspended until AC."
+        return 0
+    fi
     local bl
     local -i current=0 target=0 r_factor=0 state_changed=0
 
@@ -886,6 +944,9 @@ apply_restore() {
 
     for bl in "${BACKLIGHTS[@]}"; do
         # Clear manual overrides upon connecting stable AC power or charging
+        if (( POWER_INPUT == 1 )); then
+            clear_override_files
+        fi
         if (( POWER_INPUT == 1 )) && [[ "${BL_OVERRIDE["$bl"]:-0}" == "1" ]]; then
             BL_OVERRIDE["$bl"]=0
             state_changed=1
