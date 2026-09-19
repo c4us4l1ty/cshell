@@ -10,7 +10,7 @@
 
 use crate::{
     audio, battery, config::{self, ShellConfig}, hypr, ipc, launcher, mpris, network,
-    notifications, sysfs, wallpaper, watch, weather,
+    notifications, sysfs, theme, tray, wallpaper, watch, weather,
 };
 use gtk4::prelude::*;
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
@@ -28,9 +28,9 @@ pub const FADE_CSS: &str = r#"
 
 type Cfg = Rc<RefCell<ShellConfig>>;
 
-fn apply_css() {
+fn apply_css() -> gtk4::CssProvider {
     let provider = gtk4::CssProvider::new();
-    provider.load_from_data(FADE_CSS);
+    theme::reload_into(&provider, FADE_CSS);
     if let Some(display) = gtk4::gdk::Display::default() {
         gtk4::style_context_add_provider_for_display(
             &display,
@@ -38,6 +38,7 @@ fn apply_css() {
             gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
         );
     }
+    provider
 }
 
 fn mod_enabled(cfg: &ShellConfig, side: &str, name: &str) -> bool {
@@ -100,6 +101,7 @@ fn fill_results(list: &gtk4::ListBox, apps: &[launcher::Entry], q: &str) {
     for ent in launcher::fuzzy(apps, q) {
         let row = gtk4::Label::new(Some(&ent.name));
         row.set_halign(gtk4::Align::Start);
+        row.set_tooltip_text(Some(&format!("{}\nicon: {}", ent.exec, ent.icon)));
         list.append(&row);
     }
     if list.first_child().is_none() {
@@ -153,8 +155,16 @@ fn refresh_bar(w: &BarWidgets, cfg: &ShellConfig) {
         w.mpris.set_visible(false);
     }
     if mod_enabled(cfg, "center", "Weather") && !cfg.weather_city().is_empty() {
-        let t = weather::cached_temp().unwrap_or_else(|| "--".into());
-        w.weather.set_text(&format!("{} {}", "󰖐", t));
+        // 6h cache honored (same interval role as QML weather.interval): stale shows placeholder
+        if weather::cached_valid(std::time::Duration::from_secs(6 * 3600)) {
+            if let Some(t) = weather::cached_temp() {
+                w.weather.set_text(&format!("{} {}", "󰖐", t));
+            } else {
+                w.weather.set_text("󰖐 --");
+            }
+        } else {
+            w.weather.set_text("󰖐 --");
+        }
         w.weather.set_visible(true);
     } else {
         w.weather.set_visible(false);
@@ -290,7 +300,7 @@ pub fn run(cfg: ShellConfig) {
     let cfg: Cfg = Rc::new(RefCell::new(cfg));
     let cfg_path = config::default_config_path();
     app.connect_activate(move |app| {
-        apply_css();
+        let css_provider = apply_css();
         let widgets = Rc::new(make_bar_window(app, &cfg.borrow()));
         widgets.win.set_visible(cfg.borrow().bar.enabled);
         refresh_bar(&widgets, &cfg.borrow());
@@ -335,18 +345,16 @@ pub fn run(cfg: ShellConfig) {
                 }
                 let wanted = path.file_name().map(|n| n.to_owned());
                 let mut last = std::time::Instant::now() - Duration::from_secs(10);
-                for ev in nrx {
-                    if let Ok(ev) = ev {
-                        let hit = ev.paths.iter().any(|p| {
-                            p == &path
-                                || p.file_name()
-                                    .map(|f| wanted.as_ref().map(|n| n.as_os_str() == f).unwrap_or(false))
-                                    .unwrap_or(false)
-                        });
-                        if hit && last.elapsed() > Duration::from_millis(150) {
-                            last = std::time::Instant::now();
-                            let _ = tx.send_blocking(ipc::Event::Refresh);
-                        }
+                for ev in nrx.into_iter().flatten() {
+                    let hit = ev.paths.iter().any(|p| {
+                        p == &path
+                            || p.file_name()
+                                .map(|f| wanted.as_ref().map(|n| n.as_os_str() == f).unwrap_or(false))
+                                .unwrap_or(false)
+                    });
+                    if hit && last.elapsed() > Duration::from_millis(150) {
+                        last = std::time::Instant::now();
+                        let _ = tx.send_blocking(ipc::Event::Refresh);
                     }
                 }
             });
@@ -357,6 +365,24 @@ pub fn run(cfg: ShellConfig) {
         let notif_state = std::sync::Arc::new(std::sync::Mutex::new(
             notifications::NotifState { list: vec![], dnd: false, max: 5 },
         ));
+        // Tray (StatusNotifier) state: watcher host + item rows on demand.
+        let tray_state = std::sync::Arc::new(std::sync::Mutex::new(tray::TrayState::default()));
+
+        // Minute-aligned clock (+ battery piggyback): the ONLY timer in the app.
+        // Everything else is socket/signal/inotify-driven. First tick aligns to
+        // the next minute boundary (same as QML Clock intent, without 1Hz redraw).
+        {
+            let tx = etx.clone();
+            glib::timeout_add_seconds_local(secs_to_next_minute(), move || {
+                let _ = tx.send_blocking(ipc::Event::Refresh);
+                let tx2 = tx.clone();
+                glib::timeout_add_seconds_local(60, move || {
+                    let _ = tx2.send_blocking(ipc::Event::Refresh);
+                    glib::ControlFlow::Continue
+                });
+                glib::ControlFlow::Break
+            });
+        }
 
         // ---- Popups ----
         // Launcher 400x500
@@ -390,7 +416,6 @@ pub fn run(cfg: ShellConfig) {
                 }
                 if let Some(ent) = launcher::fuzzy(&apps3, &q).into_iter().next() {
                     if let Some(info) = gio::DesktopAppInfo::new(&ent.desktop_id) {
-                        use gio::prelude::AppInfoExtManual;
                         let ctx: Option<&gio::AppLaunchContext> = None;
                         let _ = info.launch(&[], ctx);
                     } else {
@@ -420,7 +445,11 @@ pub fn run(cfg: ShellConfig) {
             launcher_win.add_controller(ec);
         }
 
-        // ControlCenter 450 right + sliders + notification count
+        // ControlCenter 450 right + sliders + notification count.
+        // Detail popups are created below; placeholders let CC buttons reference them.
+        let wifi_win: Rc<RefCell<Option<gtk4::ApplicationWindow>>> = Rc::new(RefCell::new(None));
+        let bt_win: Rc<RefCell<Option<gtk4::ApplicationWindow>>> = Rc::new(RefCell::new(None));
+        let tray_win: Rc<RefCell<Option<gtk4::ApplicationWindow>>> = Rc::new(RefCell::new(None));
         let cc = make_popup(app, "sshell:control-center", 450, 600, true);
         let cc_notif = gtk4::Label::new(Some("0 Notifications"));
         {
@@ -447,9 +476,10 @@ pub fn run(cfg: ShellConfig) {
             vol_row.append(&vol);
             vol_row.append(&vol_pct);
             box_.append(&vol_row);
+            let vol_pct_v = vol_pct.clone();
             vol.connect_value_changed(move |s| {
                 audio::set_volume(s.value());
-                vol_pct.set_text(&format!("{}%", (s.value() * 100.0).round() as i32));
+                vol_pct_v.set_text(&format!("{}%", (s.value() * 100.0).round() as i32));
             });
             let cur = sysfs::current_frac().unwrap_or(0.5);
             let bri_row = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
@@ -477,13 +507,15 @@ pub fn run(cfg: ShellConfig) {
                 }
                 bri_pct.set_text(&format!("{}%", (s.value() * 100.0).round() as i32));
             });
-            // Quick toggles row: wifi / bluetooth / DND (user-action forks only)
+            // Quick toggles row: wifi / bluetooth / mute / DND (user-action forks only)
             let quick = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
             let wifi_btn = gtk4::Button::with_label("WiFi");
             let bt_btn = gtk4::Button::with_label("BT");
+            let mute_btn = gtk4::Button::with_label("Mute");
             let dnd_btn = gtk4::Button::with_label("DND");
             quick.append(&wifi_btn);
             quick.append(&bt_btn);
+            quick.append(&mute_btn);
             quick.append(&dnd_btn);
             box_.append(&quick);
             wifi_btn.connect_clicked(|_| {
@@ -507,6 +539,47 @@ pub fn run(cfg: ShellConfig) {
                 st.dnd = !st.dnd;
                 b.set_label(if st.dnd { "DND on" } else { "DND" });
             });
+            mute_btn.connect_clicked(move |b| {
+                audio::toggle_mute();
+                let st = audio::refresh();
+                vol.set_value(st.volume01);
+                vol_pct.set_text(&format!("{}%", (st.volume01 * 100.0).round() as i32));
+                vol_icon.set_text(if st.muted { "󰝟" } else { "󰕾" });
+                b.set_label(if st.muted { "Unmute" } else { "Mute" });
+            });
+            // Detail shortcuts (popups fill on open, never background)
+            let det_row = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+            let wifi_det = gtk4::Button::with_label("WiFi…");
+            let bt_det = gtk4::Button::with_label("BT…");
+            let tray_det = gtk4::Button::with_label("Tray…");
+            det_row.append(&wifi_det);
+            det_row.append(&bt_det);
+            det_row.append(&tray_det);
+            box_.append(&det_row);
+            {
+                let ww = wifi_win.clone();
+                wifi_det.connect_clicked(move |_| {
+                    if let Some(w) = ww.borrow().as_ref() {
+                        w.set_visible(true);
+                    }
+                });
+            }
+            {
+                let bw = bt_win.clone();
+                bt_det.connect_clicked(move |_| {
+                    if let Some(w) = bw.borrow().as_ref() {
+                        w.set_visible(true);
+                    }
+                });
+            }
+            {
+                let tw = tray_win.clone();
+                tray_det.connect_clicked(move |_| {
+                    if let Some(w) = tw.borrow().as_ref() {
+                        w.set_visible(true);
+                    }
+                });
+            }
             cc_notif.add_css_class("sshell-muted");
             box_.append(&cc_notif);
             cc.set_child(Some(&box_));
@@ -556,15 +629,160 @@ pub fn run(cfg: ShellConfig) {
             let cal = gtk4::Calendar::new();
             clock_popup.set_child(Some(&cal));
         }
+        // Weather popup (same forecast role as QML WeatherPopup): cached details
+        // + manual Refresh (single curl per click, 6h cache honored).
+        let weather_popup = make_module_popup(app, "sshell:weather-popup", 320, 220);
+        let weather_label = gtk4::Label::new(Some(""));
+        weather_label.set_wrap(true);
+        weather_label.set_halign(gtk4::Align::Start);
+        {
+            let box_ = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
+            box_.add_css_class("sshell-pill");
+            box_.set_margin_top(12);
+            box_.set_margin_bottom(12);
+            box_.set_margin_start(12);
+            box_.set_margin_end(12);
+            box_.append(&weather_label);
+            let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+            row.set_halign(gtk4::Align::Center);
+            let refresh = gtk4::Button::with_label("Refresh");
+            row.append(&refresh);
+            box_.append(&row);
+            weather_popup.set_child(Some(&box_));
+            let wl = weather_label.clone();
+            let wc = cfg.clone();
+            refresh.connect_clicked(move |b| {
+                b.set_label("…");
+                let city = wc.borrow().weather_city();
+                match weather::fetch_now(&city) {
+                    Ok(s) => wl.set_text(&s),
+                    Err(e) => wl.set_text(&format!("Refresh failed: {}", e)),
+                }
+                b.set_label("Refresh");
+                if let Some(t) = weather::cached_temp() {
+                    // bar picks it up on next refresh; force one via label is enough here
+                    let _ = t;
+                }
+            });
+        }
+        // WiFi detail popup (list on open only — no background scans)
+        let wifi_popup = make_module_popup(app, "sshell:wifi-popup", 380, 320);
+        let wifi_label = gtk4::Label::new(Some(""));
+        wifi_label.set_halign(gtk4::Align::Start);
+        {
+            let box_ = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
+            box_.add_css_class("sshell-pill");
+            box_.set_margin_top(12);
+            box_.set_margin_bottom(12);
+            box_.set_margin_start(12);
+            box_.set_margin_end(12);
+            box_.append(&wifi_label);
+            let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+            row.set_halign(gtk4::Align::Center);
+            let rescan = gtk4::Button::with_label("Rescan");
+            row.append(&rescan);
+            box_.append(&row);
+            wifi_popup.set_child(Some(&box_));
+            *wifi_win.borrow_mut() = Some(wifi_popup.clone());
+            // Fill on every open (user action) — Rescan button re-fills with 30s cooldown.
+            let wl_show = wifi_label.clone();
+            wifi_popup.connect_show(move |_| {
+                wl_show.set_text(&network::wifi_list());
+            });
+            let wl = wifi_label.clone();
+            rescan.connect_clicked(move |b| {
+                b.set_sensitive(false);
+                wl.set_text(&network::wifi_list());
+                // 30s cooldown (same guard as QML WifiDetail)
+                let b2 = b.clone();
+                glib::timeout_add_local_once(Duration::from_secs(30), move || b2.set_sensitive(true));
+            });
+        }
+        // Bluetooth detail popup (list on open only)
+        let bt_popup = make_module_popup(app, "sshell:bluetooth-popup", 380, 300);
+        let bt_label = gtk4::Label::new(Some(""));
+        bt_label.set_halign(gtk4::Align::Start);
+        {
+            let box_ = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
+            box_.add_css_class("sshell-pill");
+            box_.set_margin_top(12);
+            box_.set_margin_bottom(12);
+            box_.set_margin_start(12);
+            box_.set_margin_end(12);
+            box_.append(&bt_label);
+            bt_popup.set_child(Some(&box_));
+            *bt_win.borrow_mut() = Some(bt_popup.clone());
+            let bl_show = bt_label.clone();
+            bt_popup.connect_show(move |_| {
+                bl_show.set_text(&network::bt_list());
+            });
+        }
 
-        // Bar clicks open module popups (same as QML module popups)
+        // Tray popup (StatusNotifier items: title rows, click activates).
+        // Filled on open + on watcher wake while visible. Icons intentionally
+        // text-only (pixmap decode would cost wakeups for zero function).
+        let tray_popup = make_module_popup(app, "sshell:tray-popup", 380, 300);
+        let tray_list = gtk4::ListBox::new();
+        {
+            let box_ = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
+            box_.add_css_class("sshell-pill");
+            box_.set_margin_top(12);
+            box_.set_margin_bottom(12);
+            box_.set_margin_start(12);
+            box_.set_margin_end(12);
+            let head = gtk4::Label::new(Some("Tray"));
+            head.add_css_class("sshell-muted");
+            box_.append(&head);
+            box_.append(&tray_list);
+            tray_popup.set_child(Some(&box_));
+            let fill_rc: Rc<dyn Fn()> = Rc::new({
+                let st = tray_state.clone();
+                move || {
+                    while let Some(row) = tray_list.first_child() {
+                        tray_list.remove(&row);
+                    }
+                    let items: Vec<(String, String)> = {
+                        let s = st.lock().unwrap();
+                        let mut v: Vec<_> = s.items.iter().map(|(k, t)| (k.clone(), t.clone())).collect();
+                        v.sort();
+                        v
+                    };
+                    if items.is_empty() {
+                        tray_list.append(&gtk4::Label::new(Some("No tray items")));
+                    }
+                    for (svc, title) in items {
+                        let label = if title.is_empty() { svc.clone() } else { format!("{} ({})", title, svc) };
+                        let row = gtk4::Button::with_label(&label);
+                        row.connect_clicked(move |_| tray::activate(&svc));
+                        tray_list.append(&row);
+                    }
+                }
+            });
+            let fill_show = fill_rc.clone();
+            tray_popup.connect_show(move |_| fill_show());
+            *tray_win.borrow_mut() = Some(tray_popup.clone());
+            // resolve titles lazily on open (one D-Bus read per item, user action)
+            let st2 = tray_state.clone();
+            let fill2 = fill_rc.clone();
+            tray_popup.connect_show(move |_| {
+                let svcs: Vec<String> = st2.lock().unwrap().items.keys().cloned().collect();
+                for svc in svcs {
+                    if st2.lock().unwrap().items.get(&svc).map(|t| t.is_empty()).unwrap_or(false) {
+                        if let Some(title) = tray::item_title(&svc) {
+                            st2.lock().unwrap().items.insert(svc, title);
+                        }
+                    }
+                }
+                fill2();
+            });
+        }
         {
             let mp = mpris_popup.clone();
             let ml = mpris_label.clone();
             let g = gtk4::GestureClick::new();
             g.connect_pressed(move |_, _, _, _| {
                 if let Some(t) = mpris::current() {
-                    ml.set_text(&format!("{}\n{} — {}", if t.playing { "Playing" } else { "Paused" }, t.artist, t.title));
+                    ml.set_text(&format!("{} [{}]\n{} — {}", if t.playing { "Playing" } else { "Paused" }, t.player, t.artist, t.title));
                 } else {
                     ml.set_text("No player");
                 }
@@ -591,10 +809,34 @@ pub fn run(cfg: ShellConfig) {
             widgets.battery.add_controller(g);
         }
         {
+            let wp = wifi_popup.clone();
+            let g = gtk4::GestureClick::new();
+            g.connect_pressed(move |_, _, _, _| {
+                wp.set_visible(!wp.is_visible());
+            });
+            widgets.net.add_controller(g);
+        }
+        {
             let cp = clock_popup.clone();
             let g = gtk4::GestureClick::new();
             g.connect_pressed(move |_, _, _, _| cp.set_visible(!cp.is_visible()));
             widgets.clock.add_controller(g);
+        }
+        {
+            let wp = weather_popup.clone();
+            let wl = weather_label.clone();
+            let wc = cfg.clone();
+            let g = gtk4::GestureClick::new();
+            g.connect_pressed(move |_, _, _, _| {
+                let city = wc.borrow().weather_city();
+                if city.is_empty() {
+                    wl.set_text("Weather disabled (empty city in settings)");
+                } else {
+                    wl.set_text(&weather::cached_summary(&city));
+                }
+                wp.set_visible(!wp.is_visible());
+            });
+            widgets.weather.add_controller(g);
         }
 
         // Session fullscreen overlay (same 4 buttons + uptime + hint as QML)
@@ -662,7 +904,31 @@ pub fn run(cfg: ShellConfig) {
             flow.set_max_children_per_line(4);
             scroll.set_child(Some(&flow));
             box_.append(&scroll);
+            // Random button (same as QML randomWallpaper, minus current-repeat)
+            let rand_row = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+            rand_row.set_halign(gtk4::Align::Center);
+            let rand_btn = gtk4::Button::with_label("Random");
+            rand_row.append(&rand_btn);
+            box_.append(&rand_row);
             wp_win.set_child(Some(&box_));
+            let scanned: Rc<RefCell<Vec<std::path::PathBuf>>> = Rc::new(RefCell::new(vec![]));
+            {
+                let scanned = scanned.clone();
+                let ww = wp_win.clone();
+                let status_r = status.clone();
+                rand_btn.connect_clicked(move |_| {
+                    let list = scanned.borrow();
+                    if list.is_empty() {
+                        return;
+                    }
+                    // time-free pick without rand crate: /dev/urandom byte, no fork
+                    let seed = std::fs::read("/dev/urandom").map(|v| v[0] as usize).unwrap_or(0);
+                    let pick = &list[seed % list.len()];
+                    let msg = wallpaper::apply(pick).unwrap_or_else(|e| e);
+                    status_r.set_text(&msg);
+                    ww.set_visible(false);
+                });
+            }
             let ww = wp_win.clone();
             let status_act = status.clone();
             flow.connect_child_activated(move |_, child| {
@@ -676,6 +942,7 @@ pub fn run(cfg: ShellConfig) {
             // populate on open (scan once per open = user action, no background poll)
             let f2 = flow.clone();
             let s2 = status.clone();
+            let scanned2 = scanned.clone();
             wp_win.connect_show(move |_| {
                 while let Some(ch) = f2.first_child() {
                     f2.remove(&ch);
@@ -683,7 +950,8 @@ pub fn run(cfg: ShellConfig) {
                 let home = std::env::var("HOME").unwrap_or_else(|_| "/root".into());
                 let paths = vec![format!("{}/Pictures/wallpapers", home), format!("{}/Pictures/gifs", home)];
                 let list = wallpaper::scan(&paths);
-                s2.set_text(&format!("{} wallpapers", list.len()).as_str());
+                s2.set_text(&format!("{} wallpapers", list.len()));
+                *scanned2.borrow_mut() = list.iter().take(60).cloned().collect();
                 for p in list.iter().take(60) {
                     let thumb = wallpaper::ensure_thumb(p).unwrap_or_else(|| p.clone());
                     let pic = gtk4::Picture::for_filename(thumb.to_string_lossy().as_ref());
@@ -717,15 +985,18 @@ pub fn run(cfg: ShellConfig) {
                 grid.attach(&h_label, 0, 0, 1, 1);
                 grid.attach(&h_spin, 1, 0, 1, 1);
                 let styles = ["floating", "full", "islands", "modules"];
-                let style_combo = gtk4::ComboBoxText::new();
-                for s in styles {
-                    style_combo.append_text(s);
+                let style_items = gtk4::StringList::new(&styles);
+                let style_drop = gtk4::DropDown::new(Some(style_items), gtk4::Expression::NONE);
+                {
+                    let cur = cfg.borrow().bar.style.clone();
+                    if let Some(pos) = styles.iter().position(|s| *s == cur) {
+                        style_drop.set_selected(pos as u32);
+                    }
                 }
-                style_combo.set_active_id(Some(&cfg.borrow().bar.style));
                 let s_label = gtk4::Label::new(Some("Style"));
                 s_label.set_halign(gtk4::Align::Start);
                 grid.attach(&s_label, 0, 1, 1, 1);
-                grid.attach(&style_combo, 1, 1, 1, 1);
+                grid.attach(&style_drop, 1, 1, 1, 1);
                 nb.append_page(&grid, Some(&gtk4::Label::new(Some("Bar"))));
                 let c = cfg.clone();
                 let cp = cfg_path.clone();
@@ -733,8 +1004,9 @@ pub fn run(cfg: ShellConfig) {
                 grid.attach(&save, 0, 2, 2, 1);
                 save.connect_clicked(move |_| {
                     c.borrow_mut().bar.height = h_spin.value() as i32;
-                    if let Some(s) = style_combo.active_text() {
-                        c.borrow_mut().bar.style = s.to_string();
+                    let sel = style_drop.selected() as usize;
+                    if sel < styles.len() {
+                        c.borrow_mut().bar.style = styles[sel].to_string();
                     }
                     save_config(&c.borrow(), &cp);
                 });
@@ -822,6 +1094,7 @@ pub fn run(cfg: ShellConfig) {
         wins.borrow_mut().insert("session".into(), session.clone());
         wins.borrow_mut().insert("settings".into(), settings.clone());
         wins.borrow_mut().insert("wallpaper".into(), wp_win.clone());
+        wins.borrow_mut().insert("tray".into(), tray_popup.clone());
 
         // Single consumer: Refresh (+config reload) | Toggle | Osd
         {
@@ -835,6 +1108,7 @@ pub fn run(cfg: ShellConfig) {
             let le = launcher_entry.clone();
             let su = session_uptime.clone();
             let ns = notif_state.clone();
+            let ts = tray_state.clone();
             let cn = cc_notif.clone();
             let tl = toast_label.clone();
             let tw = toast.clone();
@@ -845,7 +1119,12 @@ pub fn run(cfg: ShellConfig) {
                             if let Ok(nc) = config::load_config(&cp) {
                                 *c.borrow_mut() = nc;
                             }
+                            theme::reload_into(&css_provider, FADE_CSS);
                             refresh_bar(&w, &c.borrow());
+                            {
+                                let n = ts.lock().unwrap().items.len();
+                                w.net.set_tooltip_text(Some(&format!("{} tray items (Tray… in ControlCenter)", n)));
+                            }
                             // Notifications UI rides the same wake (DND suppresses toast)
                             let (last, n, dnd) = {
                                 let mut st = ns.lock().unwrap();
@@ -861,7 +1140,7 @@ pub fn run(cfg: ShellConfig) {
                             cn.set_text(&format!("{} Notifications", n));
                             if let Some(n) = last {
                                 if !dnd {
-                                    tl.set_text(&format!("{}\n{}", n.title, n.body));
+                                    tl.set_text(&format!("{} — {}\n{}", n.app, n.title, n.body));
                                     tw.set_visible(true);
                                     let t = tw.clone();
                                     glib::timeout_add_local_once(
@@ -918,6 +1197,13 @@ pub fn run(cfg: ShellConfig) {
 
         // Notifications server wakes the same bus (bar refresh piggybacks free)
         notifications::serve(notif_state.clone(), {
+            let tx = etx.clone();
+            std::sync::Arc::new(move || {
+                let _ = tx.send_blocking(ipc::Event::Refresh);
+            })
+        });
+        // Tray watcher host (backs off silently if another host owns the name)
+        tray::serve(tray_state.clone(), {
             let tx = etx.clone();
             std::sync::Arc::new(move || {
                 let _ = tx.send_blocking(ipc::Event::Refresh);

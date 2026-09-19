@@ -1,51 +1,47 @@
 <div align="center">
 <pre>
-              █             ▀▀█    ▀▀█  
- ▄▄▄    ▄▄▄   █ ▄▄    ▄▄▄     █      █  
-█   ▀  █   ▀  █▀  █  █▀  █    █      █  
- ▀▀▀▄   ▀▀▀▄  █   █  █▀▀▀▀    █      █  
-▀▄▄▄▀  ▀▄▄▄▀  █   █  ▀█▄▄▀    ▀▄▄    ▀▄▄
-stormy's quickshell                 v1.1
+               █             ▀▀█    ▀▀█  
+  ▄▄▄    ▄▄▄   █ ▄▄    ▄▄▄     █      █  
+ █   ▀  █   ▀  █▀  █  █▀  █    █      █  
+  ▀▀▀▄   ▀▀▀▄  █   █  █▀▀▀▀    █      █  
+ ▀▄▄▄▀  ▀▄▄▄▀  █   █  ▀█▄▄▀    ▀▄▄    ▀▄▄
+cshell — Rust + GTK4 rewrite          v2.0
 </pre>
 </div>
 
-sshell is a shell made with [Quickshell](https://quickshell.org/) that was heavily inspired by the well known [illogical-impulse](github.com/end-4/dots-hyprland) shell by end-4. It's not perfect soo expect bugs and stuff. This is just something i made for myself as a daily driver.
+> **This repo is now the Rust + GTK4 rewrite (same UI, event-driven, zero polling).
+> Start here: [`README-FEDORA.md`](README-FEDORA.md) → `sudo ./fedora-setup.sh --yes`.**
 
-**This has not been tested on anything, sooo some stuff might not work as intended mainly cus I had no intention of making this production safe lol. So be a good egg and fix those yourself okay?**
+## Install (Fedora Minimal → Hyprland, TTY one-shot)
 
-## Requirements
+```bash
+git clone https://github.com/c4us4l1ty/cshell
+cd cshell
+chmod +x ./fedora-setup.sh
+sudo ./fedora-setup.sh --yes
+sudo reboot
+```
 
-- quickshell (duh)
-- hyprland
-- qt6-base
-- qt6-declarative
-- qt6-wayland
-- qt6-5compat
-- qt6-multimedia
-- qt6-shadertools
-- qt6-svg
-- qt6-quicktimeline
-- cliphist
-- imagemagick
-- matugen
-- ttf-material-symbols-variable-git
+Details: [`README-FEDORA.md`](README-FEDORA.md) · checklist: [`TTY-CHECKLIST.md`](TTY-CHECKLIST.md) · plan: [`Plan/Plan.md`](Plan/Plan.md)
 
-And optionally,
+## What runs
 
-- starship
-- fish
-- ttf-twemoji
+- `sshell-rs/` — Rust GTK4 layer-shell shell (bar, launcher, control-center,
+  notifications, OSD, session, wallpaper selector, settings, tray). Same layout
+  tokens as the old QML shell. `sshell-rs --check` validates without a GUI.
+- `Plan/battery-dimmer.sh` — zero-fork backlight daemon: dims 30% at ≤50%
+  battery, restores above 53%. Installed + enabled by `fedora-setup.sh`.
+- `configs/hypr/hyprland/` — Hyprland config (blur/animations off, single-handler
+  `sshell-rs` keybinds). `configs/matugen/`, `config.jsonc` — theme + shell config.
 
-_I might have missed some packages probably, so you might have to manually install any missing ones_
+## Legacy QML (retired)
 
-## Installation
+`shell.qml`, `services/`, `components/`, `settings/`, `installer.sh` (Arch-only)
+are the retired Quickshell implementation, kept for reference. Nothing binds to
+them anymore: all Hyprland keybinds call `sshell-rs`, `execs.conf` prefers the
+Rust binary. Do not extend the QML tree — port to `sshell-rs/` instead.
 
-- Just `git clone https://github.com/stormy-soul/sshell` and `cd` into it
-- And then use `sh installer.sh help` for the available options
-
-_Note: I'm not sure if everything will work fine out of the box for you, but it works on my pc_
-
-## Screenshots
+## Screenshots (QML era, UI unchanged in Rust port)
 
 <img width="1920" height="1080" alt="gumi-from-megpoid" src="https://github.com/user-attachments/assets/35e78cd6-c7d4-479f-8022-2d2ce2fd6d9f" />
 <img width="1920" height="1080" alt="notification-center" src="https://github.com/user-attachments/assets/155e819b-a3c5-40aa-aea7-8e919d3d0ed5" />

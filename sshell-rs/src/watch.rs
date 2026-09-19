@@ -66,7 +66,7 @@ pub fn watch_mpris(on_change: impl Fn() + Send + 'static) {
                     Ok(m) => m,
                     Err(_) => continue,
                 };
-                if let Some(path) = msg.path() {
+                if let Some(path) = msg.header().path() {
                     if path.as_str().starts_with("/org/mpris/MediaPlayer2") {
                         on_change();
                     }
@@ -105,7 +105,8 @@ pub fn watch_net(on_change: impl Fn() + Send + 'static) {
                     Err(_) => continue,
                 };
                 let sender = msg.header().sender().map(|s| s.to_string()).unwrap_or_default();
-                if sender.starts_with("org.freedesktop.NetworkManager") || sender.starts_with(":") && msg.path().map(|p| p.as_str().starts_with("/org/freedesktop/NetworkManager")).unwrap_or(false) {
+                let on_nm_path = msg.header().path().map(|p| p.as_str().starts_with("/org/freedesktop/NetworkManager")).unwrap_or(false);
+                if sender.starts_with("org.freedesktop.NetworkManager") || sender.starts_with(":") && on_nm_path {
                     on_change();
                     continue;
                 }

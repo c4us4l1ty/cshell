@@ -83,6 +83,9 @@ impl Default for BarConfig {
     }
 }
 
+/// Top-level config. Field names intentionally mirror config.jsonc keys
+/// (e.g. `controlCenter`) so serde maps 1:1 without rename attributes.
+#[allow(non_snake_case)]
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ShellConfig {
     #[serde(default)]

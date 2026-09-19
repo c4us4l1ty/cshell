@@ -13,6 +13,8 @@ mod mpris;
 mod network;
 mod notifications;
 mod sysfs;
+mod theme;
+mod tray;
 mod wallpaper;
 mod watch;
 mod weather;
@@ -55,7 +57,7 @@ enum Cmd {
     Osd { text: String },
 }
 
-fn run_check(cfg_path: &std::path::PathBuf) -> Result<()> {
+fn run_check(cfg_path: &std::path::Path) -> Result<()> {
     let cfg = config::load_config(cfg_path)?;
     let sig = std::env::var("HYPRLAND_INSTANCE_SIGNATURE").unwrap_or_default();
     if sig.is_empty() {
@@ -87,6 +89,21 @@ fn run_check(cfg_path: &std::path::PathBuf) -> Result<()> {
     );
     let apps = launcher::scan();
     println!("check: apps {} (.desktop)", apps.len());
+    // Dimmer: must be installed with 50/30 defaults (works off-bat requirement)
+    let dimmer_bin = "/usr/local/bin/battery-dimmer.sh";
+    if std::path::Path::new(dimmer_bin).exists() {
+        println!("check: dimmer binary present");
+    } else {
+        println!("check: dimmer binary MISSING (run fedora-setup.sh)");
+    }
+    let env = std::fs::read_to_string("/etc/battery-dimmer.env").unwrap_or_default();
+    let ok_t = env.lines().any(|l| l.trim() == "THRESHOLD=50");
+    let ok_d = env.lines().any(|l| l.trim() == "DIM_BY_PERCENT=30");
+    if ok_t && ok_d {
+        println!("check: dimmer env THRESHOLD=50 DIM_BY_PERCENT=30 OK");
+    } else {
+        println!("check: dimmer env NOT 50/30 (run fedora-setup.sh)");
+    }
     Ok(())
 }
 
@@ -154,7 +171,7 @@ fn main() -> Result<()> {
                 let w = window.to_lowercase();
                 const KNOWN: &[&str] = &[
                     "launcher", "control-center", "session", "settings", "wallpaper",
-                    "clipboard", "bar-visibility", "background",
+                    "clipboard", "bar-visibility", "background", "tray",
                 ];
                 if !KNOWN.contains(&w.as_str()) {
                     anyhow::bail!("toggle window must be one of: {}", KNOWN.join("|"));

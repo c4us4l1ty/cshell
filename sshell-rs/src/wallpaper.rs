@@ -126,7 +126,9 @@ pub fn apply(src: &Path) -> Result<String, String> {
     if !changed {
         return Ok("unchanged (theme kept)".into());
     }
-    // matugen once per new wallpaper (user action; skipped if binary absent)
+    // matugen once per new wallpaper (user action; skipped if binary absent):
+    // 1) dry-run JSON for our live accent (same as QML generate_colors.sh path),
+    // 2) full pass so repo templates (gtk.css/hypr colors) regenerate if configured.
     if which("matugen") {
         let out = std::process::Command::new("matugen")
             .args(["image", &srcs, "-t", "scheme-vibrant", "--json", "hex", "--dry-run"])
@@ -136,10 +138,17 @@ pub fn apply(src: &Path) -> Result<String, String> {
             return Err("matugen failed".into());
         }
         let home = std::env::var("HOME").unwrap_or_else(|_| "/root".into());
-        let dest = PathBuf::from(home).join(".config/sshell/material-theme.json");
+        let dest = PathBuf::from(&home).join(".config/sshell/material-theme.json");
         let tmpd = dest.with_extension("tmp.json");
         fs::write(&tmpd, &out.stdout).map_err(|e| e.to_string())?;
         fs::rename(&tmpd, &dest).map_err(|e| e.to_string())?;
+        let templates = PathBuf::from(&home).join(".config/matugen/templates");
+        if templates.is_dir() {
+            // best-effort full template pass (slow ~s, still one user click)
+            let _ = std::process::Command::new("matugen")
+                .args(["image", &srcs, "-t", "scheme-vibrant"])
+                .output();
+        }
         return Ok("theme regenerated".into());
     }
     Ok("matugen not installed (wallpaper set)".into())

@@ -12,6 +12,8 @@ pub struct Notif {
     pub app: String,
     pub title: String,
     pub body: String,
+    /// Icon name or path (shown in CC list rows next milestone; kept for spec parity).
+    #[allow(dead_code)]
     pub icon: String,
     pub timeout_ms: i32,
 }
@@ -33,9 +35,6 @@ impl NotifState {
     pub fn close(&mut self, id: u32) {
         self.list.retain(|n| n.id != id);
     }
-    pub fn clear(&mut self) {
-        self.list.clear();
-    }
 }
 
 pub struct Server {
@@ -46,6 +45,8 @@ pub struct Server {
 
 #[zbus::interface(name = "org.freedesktop.Notifications")]
 impl Server {
+    // 8 params are the freedesktop spec signature — not splittable.
+    #[allow(clippy::too_many_arguments)]
     async fn notify(
         &self,
         app_name: String,

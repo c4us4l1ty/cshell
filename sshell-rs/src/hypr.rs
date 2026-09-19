@@ -11,8 +11,12 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct Workspace {
     pub id: i32,
+    /// Hyprland workspace name (rules match on it; kept for parity, dots use id).
+    #[allow(dead_code)]
     pub name: String,
     #[serde(default)]
+    /// Origin monitor (multi-monitor follow logic; kept for parity).
+    #[allow(dead_code)]
     pub monitor: String,
 }
 
@@ -21,12 +25,12 @@ fn sock_path(name: &str) -> Option<PathBuf> {
     if sig.is_empty() {
         return None;
     }
-    let runtime = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| format!("/run/user/{}", unsafe { libc_uid() }));
+    let runtime = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| format!("/run/user/{}", self_uid()));
     Some(PathBuf::from(runtime).join("hypr").join(sig).join(name))
 }
 
-#[cfg(unix)]
-fn libc_uid() -> u32 {
+/// UID without libc dep: parse /proc/self/status (procfs always present on Linux).
+fn self_uid() -> u32 {
     // no libc dep: parse /proc/self/status Uid line
     std::fs::read_to_string("/proc/self/status")
         .ok()

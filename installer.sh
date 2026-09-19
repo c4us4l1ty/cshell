@@ -1,4 +1,11 @@
 #!/usr/bin/env bash
+# RETIRED: Arch-only Quickshell installer. The project is now Rust + GTK4 on Fedora.
+# Use instead:  sudo ./fedora-setup.sh --yes
+# (See README-FEDORA.md, TTY-CHECKLIST.md, Plan/Plan.md.)
+echo "installer.sh is retired (Arch/QML era). Run: sudo ./fedora-setup.sh --yes" >&2
+echo "Docs: README-FEDORA.md" >&2
+exit 2
+# --- legacy below (kept for reference, never executed) ---
 set -euo pipefail
 
 # ─── Directories ───

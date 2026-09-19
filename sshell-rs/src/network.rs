@@ -11,7 +11,13 @@ pub struct NetState {
     pub signal: u8,
     pub eth_connected: bool,
     pub eth_iface: String,
+    /// Bluetooth live state is intentionally NOT polled here: BlueZ RSSI
+    /// PropertiesChanged can fire several times per second, and resolving names
+    /// would fork bluetoothctl per signal (fork storm). BT surfaces on demand
+    /// via bt_list() when the detail popup opens. Fields kept for API parity.
+    #[allow(dead_code)]
     pub bt_connected: bool,
+    #[allow(dead_code)]
     pub bt_name: String,
 }
 
@@ -73,4 +79,59 @@ pub fn bar_text(st: &NetState, show_name: bool) -> String {
         return "󰤭 off".into();
     }
     "󰤭 down".into()
+}
+
+/// On-demand WiFi scan list for the detail popup. Runs `nmcli` ONLY when the
+/// popup opens / Rescan is pressed (user action) — never background.
+/// Output capped to 12 lines to keep the popup readable.
+pub fn wifi_list() -> String {
+    let out = std::process::Command::new("nmcli")
+        .args(["-t", "-f", "IN-USE,SSID,SIGNAL,SECURITY", "device", "wifi", "list", "--rescan", "no"])
+        .output();
+    let out = match out {
+        Ok(o) if o.status.success() => o,
+        _ => return "nmcli unavailable".into(),
+    };
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut rows = vec![];
+    for line in text.lines().take(12) {
+        let parts: Vec<&str> = line.split(':').collect();
+        if parts.len() < 3 {
+            continue;
+        }
+        let mark = if parts[0] == "*" { "●" } else { "○" };
+        let ssid = if parts[1].is_empty() { "(hidden)" } else { parts[1] };
+        rows.push(format!("{} {}  {}%", mark, ssid, parts[2]));
+    }
+    if rows.is_empty() {
+        "No networks (radio off?)".into()
+    } else {
+        rows.join("\n")
+    }
+}
+
+/// On-demand Bluetooth device list for the detail popup (user action only).
+pub fn bt_list() -> String {
+    let out = std::process::Command::new("bluetoothctl")
+        .args(["devices"])
+        .output();
+    let out = match out {
+        Ok(o) if o.status.success() => o,
+        _ => return "bluetoothctl unavailable".into(),
+    };
+    let text = String::from_utf8_lossy(&out.stdout);
+    let rows: Vec<String> = text
+        .lines()
+        .take(12)
+        .filter_map(|l| {
+            let l = l.strip_prefix("Device ")?;
+            let mut it = l.splitn(2, ' ');
+            Some(format!("󰂯 {}", it.nth(1).unwrap_or(it.next().unwrap_or("?"))))
+        })
+        .collect();
+    if rows.is_empty() {
+        "No devices paired".into()
+    } else {
+        rows.join("\n")
+    }
 }

@@ -59,22 +59,20 @@ fn set_override_flag() {
 }
 
 pub fn change(delta_frac: f64) -> Result<()> {
-    let cands = candidates();
-    if cands.is_empty() {
-        anyhow::bail!("no /sys/class/backlight/* writable device");
-    }
-    for bl in cands {
-        let max = read_u32(&bl.join("max_brightness")).unwrap_or(255).max(1);
-        let cur = read_u32(&bl.join("brightness")).unwrap_or(max / 2);
-        let min = (max as f64 * MIN_PERCENT_FLOOR) as u32;
-        let mut target = (cur as f64 + delta_frac * max as f64).round() as i64;
-        target = target.clamp(min as i64, max as i64);
-        fs::write(bl.join("brightness"), format!("{}\n", target))
-            .with_context(|| format!("write {}", bl.display()))?;
-        set_override_flag();
-        tracing::info!("brightness {}: {} -> {} (max {})", bl.display(), cur, target, max);
-        break;
-    }
+    // Sole primary device only (matches dimmer candidate choice).
+    let bl = match candidates().into_iter().next() {
+        Some(bl) => bl,
+        None => anyhow::bail!("no /sys/class/backlight/* writable device"),
+    };
+    let max = read_u32(&bl.join("max_brightness")).unwrap_or(255).max(1);
+    let cur = read_u32(&bl.join("brightness")).unwrap_or(max / 2);
+    let min = (max as f64 * MIN_PERCENT_FLOOR) as u32;
+    let mut target = (cur as f64 + delta_frac * max as f64).round() as i64;
+    target = target.clamp(min as i64, max as i64);
+    fs::write(bl.join("brightness"), format!("{}\n", target))
+        .with_context(|| format!("write {}", bl.display()))?;
+    set_override_flag();
+    tracing::info!("brightness {}: {} -> {} (max {})", bl.display(), cur, target, max);
     Ok(())
 }
 

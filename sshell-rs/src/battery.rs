@@ -8,8 +8,6 @@ pub struct BatteryState {
     pub pct: Option<u8>,      // 0..100
     pub charging: bool,       // status == Charging
     pub plugged: bool,        // mains online
-    pub time_empty_s: u64,
-    pub time_full_s: u64,
 }
 
 fn read_trim(path: &str) -> Option<String> {
@@ -105,8 +103,6 @@ pub fn read_sysfs() -> BatteryState {
         pct,
         charging: any_charging,
         plugged: mains_online || any_charging,
-        time_empty_s: 0,
-        time_full_s: 0,
     }
 }
 
@@ -155,14 +151,14 @@ pub fn details() -> Details {
         let pnow = read_u64_digits(&format!("{}", dev.join("power_now").display()));
         if let Some(p) = pnow {
             d.rate_w = Some(p as f64 / 1_000_000.0);
-            // time estimate
+            // time estimate (guard divide-by-zero without extra branch noise)
             let now = read_u64_digits(&format!("{}", dev.join("energy_now").display())).unwrap_or(0);
-            if p > 0 {
-                let secs = if d.status == "Charging" {
-                    full.unwrap_or(0).saturating_sub(now) * 3600 / p
-                } else {
-                    now * 3600 / p
-                };
+            let num = if d.status == "Charging" {
+                full.unwrap_or(0).saturating_sub(now)
+            } else {
+                now
+            };
+            if let Some(secs) = num.checked_mul(3600).and_then(|n| n.checked_div(p.max(1))) {
                 d.time_hm = Some(format!("{}h {:02}m", secs / 3600, (secs % 3600) / 60));
             }
         }
