@@ -7,6 +7,7 @@ mod audio;
 mod battery;
 mod config;
 mod hypr;
+mod ipc;
 mod launcher;
 mod mpris;
 mod network;
@@ -34,20 +35,24 @@ struct Args {
 
 #[derive(Subcommand, Debug, Clone)]
 enum Cmd {
-    /// Increase brightness 5% (sysfs sole-writer + override flag + OSD once)
+    /// Increase brightness 5% (daemon OSD if running, else direct sysfs)
     BrightnessUp,
     /// Decrease brightness 5%
     BrightnessDown,
-    /// Volume up 5% (one wpctl call)
+    /// Volume up 5% (one wpctl call + OSD)
     VolumeUp,
     /// Volume down 5%
     VolumeDown,
-    /// Toggle mute (one wpctl call)
+    /// Toggle mute (one wpctl call + OSD)
     Mute,
     /// MPRIS next/prev/play-pause (D-Bus first, playerctl fallback)
     Mpris { action: String },
-    /// Session: lock|logout|suspend|reboot|poweroff via logind/systemctl (no QML Process per button)
+    /// Session: lock|logout|suspend|reboot|poweroff via logind/systemctl
     Session { action: String },
+    /// Toggle daemon window: launcher|control-center|session|settings|wallpaper
+    Toggle { window: String },
+    /// Show OSD text on daemon (falls back to stdout when daemon absent)
+    Osd { text: String },
 }
 
 fn run_check(cfg_path: &std::path::PathBuf) -> Result<()> {
@@ -85,6 +90,22 @@ fn run_check(cfg_path: &std::path::PathBuf) -> Result<()> {
     Ok(())
 }
 
+/// Brightness key path: write sysfs (sole writer), then OSD via daemon if alive.
+fn brightness_cli(delta: f64) -> Result<()> {
+    sysfs::change(delta)?;
+    if let Some(frac) = sysfs::current_frac() {
+        show_osd(&format!("Brightness {}%", (frac * 100.0).round() as i32));
+    }
+    Ok(())
+}
+
+/// OSD via daemon socket when alive, else stdout (TTY/daemon-absent safe).
+fn show_osd(text: &str) {
+    if !ipc::send_osd(text, 1500) {
+        println!("{}", text);
+    }
+}
+
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
@@ -98,24 +119,54 @@ fn main() -> Result<()> {
 
     if let Some(cmd) = args.cmd {
         match cmd {
-            Cmd::BrightnessUp => return sysfs::change(sysfs::STEP_FRAC),
-            Cmd::BrightnessDown => return sysfs::change(-sysfs::STEP_FRAC),
+            Cmd::BrightnessUp => return brightness_cli(sysfs::STEP_FRAC),
+            Cmd::BrightnessDown => return brightness_cli(-sysfs::STEP_FRAC),
             Cmd::VolumeUp => {
                 let st = audio::refresh();
                 audio::set_volume(st.volume01 + 0.05);
+                let now = audio::refresh();
+                show_osd(&format!("Volume {}%", (now.volume01 * 100.0).round() as i32));
                 return Ok(());
             }
             Cmd::VolumeDown => {
                 let st = audio::refresh();
                 audio::set_volume(st.volume01 - 0.05);
+                let now = audio::refresh();
+                show_osd(&format!("Volume {}%", (now.volume01 * 100.0).round() as i32));
                 return Ok(());
             }
             Cmd::Mute => {
                 audio::toggle_mute();
+                let now = audio::refresh();
+                let msg = if now.muted {
+                    "Muted".to_string()
+                } else {
+                    format!("Volume {}%", (now.volume01 * 100.0).round() as i32)
+                };
+                show_osd(&msg);
                 return Ok(());
             }
             Cmd::Mpris { action } => {
                 mpris::action(&action);
+                return Ok(());
+            }
+            Cmd::Toggle { window } => {
+                let w = window.to_lowercase();
+                const KNOWN: &[&str] = &[
+                    "launcher", "control-center", "session", "settings", "wallpaper",
+                    "clipboard", "bar-visibility", "background",
+                ];
+                if !KNOWN.contains(&w.as_str()) {
+                    anyhow::bail!("toggle window must be one of: {}", KNOWN.join("|"));
+                }
+                if !ipc::send_toggle(&w) {
+                    eprintln!("sshell-rs: daemon not running (start it from Hyprland exec-once first)");
+                    std::process::exit(3);
+                }
+                return Ok(());
+            }
+            Cmd::Osd { text } => {
+                show_osd(&text);
                 return Ok(());
             }
             Cmd::Session { action } => {
@@ -151,6 +202,12 @@ fn main() -> Result<()> {
         eprintln!("sshell-rs: no Wayland/Hyprland session.");
         eprintln!("Run `sshell-rs --check` for validation, or launch from Hyprland exec-once.");
         std::process::exit(2);
+    }
+    // Single instance: exec-once/user-service guard. A second daemon would fight
+    // the first over layer-shell namespaces + backlight override flags.
+    if std::os::unix::net::UnixStream::connect(ipc::sock_path()).is_ok() {
+        eprintln!("sshell-rs: daemon already running (control socket alive). Exiting.");
+        std::process::exit(0);
     }
     app::run(cfg);
     Ok(())

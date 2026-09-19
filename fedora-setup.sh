@@ -82,7 +82,7 @@ install_packages() {
   local POWER_PKGS=(tuned-ppd powertop)
   local MESA_PKGS=(mesa-dri-drivers mesa-vulkan-drivers)
   local FONT_PKGS=(cascadia-code-nf-fonts rsms-inter-fonts jetbrains-mono-fonts google-noto-emoji-fonts)
-  local UTIL_PKGS=(cliphist ImageMagick jq foot starship fish grim wl-clipboard slurp gnome-keyring matugen)
+  local UTIL_PKGS=(cliphist ImageMagick jq foot starship fish grim wl-clipboard slurp gnome-keyring matugen libnotify)
 
   local ALL_PKGS=("${HYPR_PKGS[@]}" "${GTK_PKGS[@]}" "${NET_PKGS[@]}" "${AUDIO_PKGS[@]}" "${POWER_PKGS[@]}" "${MESA_PKGS[@]}" "${FONT_PKGS[@]}" "${UTIL_PKGS[@]}")
 
@@ -221,6 +221,24 @@ EOF
   fi
 }
 
+install_fonts() {
+  # Material Symbols Rounded is NOT in Fedora repos; fetch variable TTF once
+  # (best-effort, non-fatal — Nerd Font codepoints in the bar work regardless).
+  log "Installing icon fonts (Material Symbols, best-effort)..."
+  local fdir="$TARGET_HOME/.local/share/fonts"
+  run_as_user mkdir -p "$fdir"
+  local dst="$fdir/MaterialSymbolsRounded.ttf"
+  if [[ ! -s "$dst" ]]; then
+    run_as_user bash -c "curl -sSL --max-time 60 'https://github.com/google/material-design-icons/raw/master/variablefont/MaterialSymbolsRounded%5BFILL%2CGRAD%2Copsz%2Cwght%5D.ttf' -o '$dst' && test -s '$dst'" \
+      && ok "Material Symbols installed" \
+      || warn "Material Symbols download failed (offline?) — continuing"
+  else
+    ok "Material Symbols already present"
+  fi
+  run fc-cache -f "$fdir" 2>/dev/null || true
+  run_as_user fc-match "Material Symbols Rounded" 2>/dev/null || warn "Material Symbols not resolved (cosmetic only)"
+}
+
 system_tuning() {
   log "Configuring greetd and power optimizations..."
   run systemctl set-default graphical.target || true
@@ -271,6 +289,7 @@ main() {
 
   setup_repos
   install_packages
+  install_fonts
   ensure_rust
   backup_configs
   deploy_configs

@@ -121,6 +121,56 @@ pub fn bar_text(s: &BatteryState) -> String {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct Details {
+    pub pct: Option<u8>,
+    pub status: String,
+    pub health_pct: Option<f64>,
+    pub rate_w: Option<f64>,
+    pub time_hm: Option<String>,
+}
+
+/// On-demand details for Battery popup (same fields as QML BatteryPopup).
+/// Reads sysfs directly, no forks. Called on popup open / battery wake only.
+pub fn details() -> Details {
+    let st = read_sysfs();
+    let mut d = Details { pct: st.pct, status: String::new(), health_pct: None, rate_w: None, time_hm: None };
+    let rd = std::fs::read_dir("/sys/class/power_supply").map(|r| r.filter_map(|e| e.ok()).collect::<Vec<_>>()).unwrap_or_default();
+    for e in rd {
+        let dev = e.path();
+        let typ = read_trim(&format!("{}", dev.join("type").display())).unwrap_or_default().to_lowercase();
+        if typ != "battery" {
+            continue;
+        }
+        d.status = read_trim(&format!("{}", dev.join("status").display())).unwrap_or_default();
+        let full = read_u64_digits(&format!("{}", dev.join("energy_full").display()))
+            .or_else(|| read_u64_digits(&format!("{}", dev.join("charge_full").display())));
+        let design = read_u64_digits(&format!("{}", dev.join("energy_full_design").display()))
+            .or_else(|| read_u64_digits(&format!("{}", dev.join("charge_full_design").display())));
+        if let (Some(f), Some(dsg)) = (full, design) {
+            if dsg > 0 {
+                d.health_pct = Some(f as f64 * 100.0 / dsg as f64);
+            }
+        }
+        let pnow = read_u64_digits(&format!("{}", dev.join("power_now").display()));
+        if let Some(p) = pnow {
+            d.rate_w = Some(p as f64 / 1_000_000.0);
+            // time estimate
+            let now = read_u64_digits(&format!("{}", dev.join("energy_now").display())).unwrap_or(0);
+            if p > 0 {
+                let secs = if d.status == "Charging" {
+                    full.unwrap_or(0).saturating_sub(now) * 3600 / p
+                } else {
+                    now * 3600 / p
+                };
+                d.time_hm = Some(format!("{}h {:02}m", secs / 3600, (secs % 3600) / 60));
+            }
+        }
+        break; // primary battery only (multi-battery aggregate already in bar %)
+    }
+    d
+}
+
 /// Should dimmer be active? Same hysteresis as battery-dimmer (50/53).
 pub fn should_dim(pct: u8, dimmed: bool) -> bool {
     const THRESHOLD: u8 = 50;
