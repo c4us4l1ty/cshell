@@ -1672,8 +1672,10 @@ name = "sshell-rs"
 version = "2.0.0"
 dependencies = [
  "anyhow",
+ "async-channel",
  "chrono",
  "clap",
+ "futures-lite",
  "gio",
  "glib",
  "gtk4",

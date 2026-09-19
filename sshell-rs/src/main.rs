@@ -6,11 +6,14 @@ mod app;
 mod audio;
 mod battery;
 mod config;
+mod hypr;
 mod launcher;
 mod mpris;
 mod network;
+mod notifications;
 mod sysfs;
 mod wallpaper;
+mod watch;
 mod weather;
 
 use anyhow::Result;
