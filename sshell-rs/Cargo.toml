@@ -1,0 +1,33 @@
+[package]
+name = "sshell-rs"
+version = "2.0.0"
+edition = "2021"
+description = "cshell Rust + GTK4 shell bar — event-driven, zero polling, same UI tokens as QML"
+license = "MIT"
+
+[[bin]]
+name = "sshell-rs"
+path = "src/main.rs"
+
+[dependencies]
+gtk4 = { version = "0.9", features = ["v4_10"] }
+gtk4-layer-shell = "0.3"
+glib = "0.20"
+gio = "0.20"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# jsonc-parser allows comments + trailing commas like config.jsonc
+jsonc-parser = "0.26"
+zbus = { version = "4", default-features = false, features = ["tokio", "p2p"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time", "fs"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "journald"] }
+notify = "6"
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
+panic = "abort"

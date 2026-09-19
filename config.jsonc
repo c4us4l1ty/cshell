@@ -74,8 +74,8 @@
             "~/Pictures/wallpapers",
             "~/Pictures/gifs"
         ],
-        "copyAfter": true,
-        "copyAfterTo": "/usr/share/sddm/themes/silent/backgrounds/",
+        "copyAfter": false,
+        "copyAfterTo": "~/.local/state/sshell/wallpaper/",
         "copyAfterAs": "default.png",
         "wallpaperMode": "image" // image/shader
     },
