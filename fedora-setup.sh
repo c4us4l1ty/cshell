@@ -104,11 +104,10 @@ parse_args() {
 banner() {
   echo -e "${CYAN}"
   cat <<'EOF'
-               █             ▀▀█    ▀▀█
-  ▄▄▄    ▄▄▄   █ ▄▄    ▄▄▄     █      █
- █   ▀  █   ▀  █▀  █  █▀  █    █      █
-  ▀▀▀▄   ▀▀▀▄  █   █  █▀▀▀▀    █      █
- ▀▄▄▄▀  ▀▄▄▄▀  █   █  ▀█▄▄▀    ▀▄▄    ▀▄▄
+ ▗▄▄▖     ▗▄▄▖▗▖ ▗▖▗▄▄▄▖▗▖   ▗▖   
+▐▌       ▐▌   ▐▌ ▐▌▐▌   ▐▌   ▐▌   
+▐▌        ▝▀▚▖▐▛▀▜▌▐▛▀▀▘▐▌   ▐▌   
+▝▚▄▄▖    ▗▄▄▞▘▐▌ ▐▌▐▙▄▄▖▐▙▄▄▖▐▙▄▄▖
 EOF
   echo -e "${NC}${DIM} cshell fedora-setup  v$VERSION  (Rust + GTK4, Fedora Minimal -> Hyprland)${NC}"
 }
