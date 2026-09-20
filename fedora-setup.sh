@@ -143,7 +143,7 @@ install_packages() {
   local GTK_PKGS=(gtk4 gtk4-devel gtk4-layer-shell gtk4-layer-shell-devel gobject-introspection gsettings-desktop-schemas)
   local NET_PKGS=(NetworkManager-wifi iw wpa_supplicant bluez bluez-tools)
   local AUDIO_PKGS=(pipewire pipewire-pulseaudio pipewire-alsa wireplumber pamixer playerctl brightnessctl)
-  local POWER_PKGS=(tuned-ppd powertop)
+  local POWER_PKGS=(tuned-ppd)
   local MESA_PKGS=(mesa-dri-drivers mesa-vulkan-drivers intel-media-driver libva-intel-driver)
   local FONT_PKGS=(cascadia-code-nf-fonts rsms-inter-fonts jetbrains-mono-fonts google-noto-emoji-color-fonts google-noto-emoji-fonts)
   local UTIL_PKGS=(cliphist ImageMagick jq foot starship fish grim wl-clipboard slurp gnome-keyring libnotify btop fastfetch)
@@ -273,7 +273,7 @@ EOF
   run systemctl enable --now battery-dimmer.service 2>/dev/null || warn "Could not start battery-dimmer (check journalctl -u battery-dimmer)"
   # tuned-ppd replaces power-profiles-daemon on Fedora: enable the right unit
   if rpm -q tuned-ppd &>/dev/null; then
-    run systemctl enable --now tuned-ppd 2>/dev/null || run systemctl enable --now tuned 2>/dev/null || true
+  run systemctl enable --now tuned 2>/dev/null || warn "Could not start tuned"
   fi
   run systemctl enable --now NetworkManager 2>/dev/null || true
   run systemctl enable --now bluetooth 2>/dev/null || true
