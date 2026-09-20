@@ -14,10 +14,24 @@ cshell — Rust + GTK4 rewrite          v2.0
 ## Install (Fedora Minimal → Hyprland, TTY one-shot)
 
 ```bash
+# 1. Update Fedora
+sudo dnf upgrade --refresh -y
+
+# 2. Reboot into the updated system
+sudo reboot
+
+# 3. Back in TTY, install only git
+sudo dnf install git -y
+
+# 4. Get your setup
 git clone https://github.com/c4us4l1ty/cshell
 cd cshell
-chmod +x ./fedora-setup.sh
+
+# 5. Run your installer
+chmod +x fedora-setup.sh
 sudo ./fedora-setup.sh --yes
+
+# 6. Reboot
 sudo reboot
 ```
 
